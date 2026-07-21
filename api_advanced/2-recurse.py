@@ -1,47 +1,60 @@
 #!/usr/bin/python3
-
-#!/usr/bin/python3
-"""
-This module defines a recursive function to query the Reddit API and
-return a list containing the titles of all hot articles for a given subreddit.
-"""
-
-import requests
+"""Module that recursively queries the Reddit API for all hot post titles."""
+import json
+import urllib.error
+import urllib.request
 
 
-def recurse(subreddit, hot_list=None, after=None):
-    """
-    Recursively queries the Reddit API and returns a list of titles of all
-    hot articles for a given subreddit.
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Redirect handler that blocks all HTTP redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Return None to prevent following any redirect."""
+        return None
+
+
+def recurse(subreddit, hot_list=[], after="", first_call=True):
+    """Recursively collect all hot post titles for a given subreddit.
 
     Args:
-        subreddit (str): The name of the subreddit.
-        hot_list (list): List to accumulate titles (used for recursion).
-        after (str): Token for the next page of results.
+        subreddit (str): the name of the subreddit to query.
+        hot_list (list): accumulator list of post titles collected so far.
+        after (str): pagination token for the next page of results.
+        first_call (bool): whether this is the initial call, used to
+            reset the accumulator so results don't leak between calls.
 
     Returns:
-        list: List of titles of all hot articles, or None if no results.
+        list: all hot post titles for the subreddit, or None if the
+            subreddit is invalid or has no results.
     """
-    if hot_list is None:
+    if first_call:
         hot_list = []
 
-    url = f"https://www.reddit.com/r/{subreddit}/hot.json"
-    headers = {"User-Agent": "python:recurse:v1.0 (by /u/yourusername)"}
-    params = {"after": after, "limit": 100}
+    url = "https://www.reddit.com/r/{}/hot.json?limit=100".format(subreddit)
+    if after:
+        url += "&after={}".format(after)
+    headers = {"User-Agent": "Mozilla/5.0 (recurse-hot-list:v1.0)"}
+
+    request = urllib.request.Request(url, headers=headers)
+    opener = urllib.request.build_opener(NoRedirectHandler)
 
     try:
-        response = requests.get(
-            url, headers=headers, params=params, allow_redirects=False, timeout=10
-        )
-        if response.status_code != 200:
-            return None
-        data = response.json().get("data", {})
-        posts = data.get("children", [])
-        for post in posts:
-            hot_list.append(post.get("data", {}).get("title"))
-        after = data.get("after")
-        if after:
-            return recurse(subreddit, hot_list, after)
-        return hot_list if hot_list else None
-    except Exception:
+        with opener.open(request) as response:
+            if response.status != 200:
+                return None
+            data = json.loads(response.read().decode())
+    except (urllib.error.HTTPError, urllib.error.URLError):
         return None
+
+    posts = data.get("data", {}).get("children", [])
+    if not posts and first_call:
+        return None
+
+    for post in posts:
+        hot_list.append(post.get("data", {}).get("title"))
+
+    next_after = data.get("data", {}).get("after")
+    if next_after:
+        return recurse(subreddit, hot_list, next_after, False)
+
+    return hot_list

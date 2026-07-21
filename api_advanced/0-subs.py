@@ -1,36 +1,39 @@
 #!/usr/bin/python3
+"""Module that queries the Reddit API for a subreddit's subscriber count."""
+import json
+import urllib.error
+import urllib.request
 
-#!/usr/bin/python3
-"""
-This module defines a function to query the Reddit API and return
-the number of subscribers for a given subreddit.
-"""
 
-import requests
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Redirect handler that blocks all HTTP redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Return None to prevent following any redirect."""
+        return None
 
 
 def number_of_subscribers(subreddit):
-    """
-    Queries the Reddit API and returns the number of subscribers
-    for a given subreddit.
+    """Return the number of subscribers for a given subreddit.
 
     Args:
-        subreddit (str): The name of the subreddit.
+        subreddit (str): the name of the subreddit to query.
 
     Returns:
-        int: The number of subscribers, or 0 if the subreddit is invalid.
+        int: the number of subscribers, or 0 if the subreddit is invalid.
     """
-    if not isinstance(subreddit, str) or subreddit == "":
-        return 0
+    url = "https://www.reddit.com/r/{}/about.json".format(subreddit)
+    headers = {"User-Agent": "Mozilla/5.0 (subscriber-counter:v1.0)"}
 
-    url = f"https://www.reddit.com/r/{subreddit}/about.json"
-    headers = {"User-Agent": "python:sub.count:v1.0 (by /u/yourusername)"}
+    request = urllib.request.Request(url, headers=headers)
+    opener = urllib.request.build_opener(NoRedirectHandler)
 
     try:
-        response = requests.get(url, headers=headers, allow_redirects=False, timeout=10)
-        if response.status_code != 200:
-            return 0
-        data = response.json()
-        return data.get("data", {}).get("subscribers", 0)
-    except Exception:
+        with opener.open(request) as response:
+            if response.status != 200:
+                return 0
+            data = json.loads(response.read().decode())
+    except (urllib.error.HTTPError, urllib.error.URLError):
         return 0
+
+    return data.get("data", {}).get("subscribers", 0)

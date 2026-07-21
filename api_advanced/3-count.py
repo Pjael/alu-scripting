@@ -1,82 +1,77 @@
 #!/usr/bin/python3
-
-#!/usr/bin/python3
-"""
-This module defines a recursive function to query the Reddit API,
-parse the titles of all hot articles, and print a sorted count of
-given keywords (case-insensitive, delimited by spaces).
-"""
-
-import requests
+"""Module that recursively queries the Reddit API to count keywords."""
+import json
+import urllib.error
+import urllib.request
 
 
-def count_words(subreddit, word_list, hot_list=None, after=None, counts=None):
-    """
-    Recursively queries the Reddit API, parses the titles of all hot articles,
-    and prints a sorted count of given keywords (case-insensitive).
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Redirect handler that blocks all HTTP redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Return None to prevent following any redirect."""
+        return None
+
+
+def count_words(subreddit, word_list, word_count=None, after="",
+                 first_call=True):
+    """Recursively count keyword occurrences in a subreddit's hot titles.
 
     Args:
-        subreddit (str): The name of the subreddit.
-        word_list (list): List of keywords to count.
-        hot_list (list): List to accumulate titles (used for recursion).
-        after (str): Token for the next page of results.
-        counts (dict): Dictionary to accumulate keyword counts.
+        subreddit (str): the name of the subreddit to query.
+        word_list (list): the keywords to search for and count.
+        word_count (dict): accumulator dict mapping lowercase keyword
+            to running occurrence count.
+        after (str): pagination token for the next page of results.
+        first_call (bool): whether this is the initial call, used to
+            reset the accumulator and normalize word_list once.
 
     Prints:
-        Sorted count of keywords found in the titles.
+        Each matched keyword and its count, sorted by count descending
+        then alphabetically ascending. Prints nothing if the subreddit
+        is invalid or no keywords match.
     """
-    if hot_list is None:
-        hot_list = []
-    if counts is None:
-        counts = {}
+    if first_call:
+        word_count = {}
+        normalized = [word.lower() for word in word_list]
+        for word in normalized:
+            word_count[word] = word_count.get(word, 0)
+        word_list = normalized
 
-    url = f"https://www.reddit.com/r/{subreddit}/hot.json"
-    headers = {"User-Agent": "python:count.words:v1.0 (by /u/yourusername)"}
-    params = {"after": after, "limit": 100}
+    url = "https://www.reddit.com/r/{}/hot.json?limit=100".format(subreddit)
+    if after:
+        url += "&after={}".format(after)
+    headers = {"User-Agent": "Mozilla/5.0 (count-words:v1.0)"}
+
+    request = urllib.request.Request(url, headers=headers)
+    opener = urllib.request.build_opener(NoRedirectHandler)
 
     try:
-        response = requests.get(
-            url, headers=headers, params=params, allow_redirects=False, timeout=10
-        )
-        if response.status_code != 200:
-            return
-
-        data = response.json().get("data", {})
-        posts = data.get("children", [])
-        for post in posts:
-            title = post.get("data", {}).get("title", "")
-            hot_list.append(title)
-
-        after = data.get("after")
-        if after:
-            count_words(subreddit, word_list, hot_list, after, counts)
-        else:
-            # Prepare word count
-            word_map = {}
-            for word in word_list:
-                key = word.lower()
-                word_map[key] = word_map.get(key, 0) + 1  # handle duplicates
-
-            for title in hot_list:
-                words = title.lower().split()
-                for key in word_map:
-                    # Count only exact matches (not substrings)
-                    count = words.count(key)
-                    if count > 0:
-                        counts[key] = counts.get(key, 0) + count
-
-            # Multiply by number of times word appears in word_list
-            for key in counts:
-                counts[key] *= word_map[key]
-
-            # Filter out zero counts and sort
-            sorted_counts = sorted(
-                [(k, v) for k, v in counts.items() if v > 0],
-                key=lambda x: (-x[1], x[0])
-            )
-
-            for word, count in sorted_counts:
-                print(f"{word}: {count}")
-
-    except Exception:
+        with opener.open(request) as response:
+            if response.status != 200:
+                return
+            data = json.loads(response.read().decode())
+    except (urllib.error.HTTPError, urllib.error.URLError):
         return
+
+    posts = data.get("data", {}).get("children", [])
+    if not posts and first_call:
+        return
+
+    for post in posts:
+        title = post.get("data", {}).get("title", "")
+        for token in title.split():
+            token = token.lower()
+            if token in word_list:
+                word_count[token] = word_count.get(token, 0) + 1
+
+    next_after = data.get("data", {}).get("after")
+    if next_after:
+        return count_words(subreddit, word_list, word_count,
+                            next_after, False)
+
+    matches = [(word, count) for word, count in word_count.items()
+               if count > 0]
+    matches.sort(key=lambda pair: (-pair[1], pair[0]))
+    for word, count in matches:
+        print("{}: {}".format(word, count))
